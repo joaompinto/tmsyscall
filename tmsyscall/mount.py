@@ -227,8 +227,8 @@ MNT_EXPIRE = MNTFlags.EXPIRE
 ###############################################################################
 # Main mount/umount functions
 
-def mount(source, target, fs_type, *mnt_opts_args,
-          mnt_flags=(), **mnt_opts_kwargs):
+def mount(source, target, fs_type, mnt_flags=(), *mnt_opts_args, # pylint: disable=W1113
+          **mnt_opts_kwargs):
     """Mount ``source`` on ``target`` using filesystem type ``fs_type`` and
     mount flags ``mnt_flags``.
 
@@ -292,9 +292,7 @@ def unmount(target, mnt_flags=()):
 
     if not mnt_flags:
         return _umount(target)
-
-    else:
-        return _umount2(target, mnt_flags)
+    return _umount2(target, mnt_flags)
 
 
 ###############################################################################

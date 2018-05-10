@@ -10,7 +10,7 @@ to install this package.
 from setuptools import setup, find_packages
 from os.path import join
 
-name = "your_package"
+name = "tmsyscall"
 
 desc = "Show detailed information for docker images"
 long_desc = "Shows detailed information for docker images"

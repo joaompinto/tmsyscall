@@ -298,7 +298,7 @@ def _fmt_mask(mask):
     """Parse an Inotify event mask into indivitual event flags."""
     masks = []
     # Non-iterable value INEvent is used in an iterating context
-    for event in INEvent:
+    for event in INEvent: # pylint: disable=E1133
         if mask & event:
             masks.append(event.name)
             mask ^= event
