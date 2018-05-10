@@ -56,3 +56,6 @@ docs/html_docs.zip
 
 *.pid
 *.log
+
+.pytest_cache/
+

@@ -23,7 +23,7 @@ from ctypes.util import find_library
 import enum
 import six
 
-from treadmill import utils
+from tmsyscall import utils
 
 _LOGGER = logging.getLogger(__name__)
 
