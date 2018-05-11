@@ -152,8 +152,8 @@ class MSFlags(enum.IntEnum):
     #: Recursively apply the UNBINDABLE, PRIVATE, SLAVE, or SHARED flags.
     REC = 0x004000
 
-    # See https://www.kernel.org/doc/Documentation/filesystems/
-    #                                                       sharedsubtree.txt
+    # See https://www.kernel.org/doc/Documentation/filesystems/sharedsubtree.txt
+    #
     #: unbindable mount
     UNBINDABLE = 0x020000
     #: private mount
