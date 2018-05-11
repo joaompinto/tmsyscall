@@ -296,6 +296,102 @@ def unmount(target, mnt_flags=()):
         return _umount(target)
     return _umount2(target, mnt_flags)
 
+def mount_move(target, source):
+    """Move a mount from one to a point to another.
+    """
+    return mount(source=source, target=target, fs_type=None, mnt_flags=[MS_MOVE])
+
+
+def mount_bind(newroot, target, source=None, recursive=True, read_only=True):
+    """Bind mounts `source` to `newroot/target` so that `source` is accessed
+    when reaching `newroot/target`.
+
+    If a directory, the source will be mounted using --rbind.
+    """
+    # Ensure root directory exists
+    if not os.path.exists(newroot):
+        raise Exception('Path %r does not exist' % newroot)
+
+    if source is None:
+        source = target
+
+    target = utils.norm_safe(target)
+    source = utils.norm_safe(source)
+
+    # Make sure target directory exists.
+    if not os.path.exists(source):
+        raise Exception('Source path %r does not exist' % source)
+
+    mnt_flags = [MS_BIND]
+
+    # Use --rbind for directories and --bind for files.
+    if recursive and os.path.isdir(source):
+        mnt_flags.append(MS_REC)
+
+    # Strip leading /, ensure that mount is relative path.
+    while target.startswith('/'):
+        target = target[1:]
+
+    # Create mount directory, make sure it does not exists.
+    target_fp = os.path.join(newroot, target)
+    if os.path.isdir(source):
+        utils.mkdir_safe(target_fp)
+    else:
+        utils.mkfile_safe(target_fp)
+
+    res = mount(source=source, target=target_fp, fs_type=None, mnt_flags=mnt_flags)
+
+    if res == 0 and read_only:
+        res = mount(
+            source=None, target=target_fp,
+            fs_type=None, mnt_flags=(MS_BIND, MS_RDONLY, MS_REMOUNT)
+        )
+
+    return res
+
+
+def mount_procfs(newroot, target='/proc'):
+    """Mounts procfs on directory.
+    """
+    while target.startswith('/'):
+        target = target[1:]
+
+    mnt_flags = [
+        MS_NODEV,
+        MS_NOEXEC,
+        MS_NOSUID,
+        MS_RELATIME,
+    ]
+
+    return mount(
+        source='proc',
+        target=os.path.join(newroot, target),
+        fs_type='proc',
+        mnt_flags=mnt_flags,
+    )
+
+
+def mount_tmpfs(newroot, target, **mnt_opts):
+    """Mounts directory on tmpfs.
+    """
+    while target.startswith('/'):
+        target = target[1:]
+
+    mnt_flags = [
+        MS_NODEV,
+        MS_NOEXEC,
+        MS_NOSUID,
+        MS_RELATIME,
+    ]
+
+    return mount(
+        source='tmpfs',
+        target=os.path.join(newroot, target),
+        fs_type='tmpfs',
+        mnt_flags=mnt_flags,
+        **mnt_opts
+    )
+
 class MountEntry(object):
     """Mount table entry data.
     """
@@ -309,8 +405,7 @@ class MountEntry(object):
         'parent_id'
     )
 
-    def __init__(self, source, target, fs_type, mnt_opts,
-                 mount_id, parent_id):
+    def __init__(self, source, target, fs_type, mnt_opts, mount_id, parent_id):
         self.source = source
         self.target = target
         self.fs_type = fs_type
@@ -459,23 +554,19 @@ def cleanup_mounts(whitelist_patterns, ignore_exc=False):
         If True, proceed in a best effort, only logging when unmount fails.
     """
     _LOGGER.info('Removing all mounts except %r', whitelist_patterns)
-    current_mounts = [mount_entry.mount_id for mount_entry in list_mounts()]
+    current_mounts = [mount_entry for mount_entry in list_mounts()]
 
     # We need to iterate over mounts in "layering" order.
     mount_parents = {}
-    for mount_entry in current_mounts.values():
-        mount_parents.setdefault(
-            mount_entry.parent_id,
-            []
-        ).append(mount_entry.mount_id)
+    for mount_entry in current_mounts:
+        mount_parents_item = mount_parents.get(mount_entry.parent_id, [])
+        mount_parents_item.append(mount_entry.mount_id)
+        mount_parents[mount_entry.mount_id] = mount_parents_item
 
     sorted_mounts = sorted(
         [
-            (
-                len(mount_parents.get(mount_entry.mount_id, [])),
-                mount_entry
-            )
-            for mount_entry in current_mounts.values()
+            (len(mount_parents.get(mount_entry.mount_id, [])), mount_entry)
+            for mount_entry in current_mounts
         ]
     )
 
@@ -524,5 +615,6 @@ __all__ = [
     'MountEntry',
     'cleanup_mounts',
     'mount',
+    'mount_procfs',
     'unmount'
 ]
