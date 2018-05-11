@@ -13,6 +13,8 @@
         "**/CVS": true,
         "**/.DS_Store": true,
         "**/*.pyc": true,
-        "**/*.egg-info": true
-    }
+        "**/*.egg-info": true,
+	"**/__pycache__": true
+    },
+    "python.linting.enabled": true
 }

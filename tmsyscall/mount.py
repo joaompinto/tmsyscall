@@ -10,6 +10,8 @@ import itertools
 import logging
 import operator
 import os
+import errno
+import fnmatch
 
 import ctypes
 from ctypes import (
@@ -294,8 +296,208 @@ def unmount(target, mnt_flags=()):
         return _umount(target)
     return _umount2(target, mnt_flags)
 
+class MountEntry(object):
+    """Mount table entry data.
+    """
+
+    __slots__ = (
+        'source',
+        'target',
+        'fs_type',
+        'mnt_opts',
+        'mount_id',
+        'parent_id'
+    )
+
+    def __init__(self, source, target, fs_type, mnt_opts,
+                 mount_id, parent_id):
+        self.source = source
+        self.target = target
+        self.fs_type = fs_type
+        self.mnt_opts = mnt_opts
+        self.mount_id = int(mount_id)
+        self.parent_id = int(parent_id)
+
+    def __repr__(self):
+        return (
+            '{name}(source={src!r}, target={target!r}, '
+            'fs_type={fs_type!r}, mnt_opts={mnt_opts!r})'
+        ).format(
+            name=self.__class__.__name__,
+            src=self.source,
+            target=self.target,
+            fs_type=self.fs_type,
+            mnt_opts=self.mnt_opts
+        )
+
+    def __lt__(self, other):
+        """Ordering is based on mount target.
+        """
+        return self.target < other.target
+
+    def __eq__(self, other):
+        """Equality is defined as the equality of the mount entry's attributes.
+        """
+        res = (
+            (self.mount_id == other.mount_id) and
+            (self.parent_id == other.parent_id) and
+            (self.source == other.source) and
+            (self.target == other.target) and
+            (self.fs_type == other.fs_type) and
+            (self.mnt_opts == other.mnt_opts)
+        )
+        return res
+
+    @classmethod
+    def mount_entry_parse(cls, mount_entry_line):
+        """Create a `:class:MountEntry from a mountinfo data line.
+
+        The file contains lines of the form:
+
+            36 35 98:0 /mnt1 /mnt2 rw,noatime master:1
+                                            - ext3 /dev/root rw,errors=continue
+            (1)(2)(3)   (4)   (5)      (6)      (7)
+                                           (8) (9)   (10)         (11)
+
+        The numbers in parentheses are labels for the descriptions
+        below:
+
+            (1)  mount ID: a unique ID for the mount (may be reused after
+                 umount(2)).
+
+            (2)  parent ID: the ID of the parent mount (or of self for the
+                 root of this mount namespace's mount tree).
+
+                 If the parent mount point lies outside the process's root
+                 directory (see chroot(2)), the ID shown here won't have a
+                 corresponding record in mountinfo whose mount ID (field
+                 1) matches this parent mount ID (because mount points
+                 that lie outside the process's root directory are not
+                 shown in mountinfo).  As a special case of this point,
+                 the process's root mount point may have a parent mount
+                 (for the initramfs filesystem) that lies outside the
+                 process's root directory, and an entry for that mount
+                 point will not appear in mountinfo.
+
+            (3)  major:minor: the value of st_dev for files on this
+                 filesystem (see stat(2)).
+
+            (4)  root: the pathname of the directory in the filesystem
+                 which forms the root of this mount.
+
+            (5)  mount point: the pathname of the mount point relative to
+                 the process's root directory.
+
+            (6)  mount options: per-mount options.
+
+            (7)  optional fields: zero or more fields of the form
+                 "tag[:value]"; see below.
+
+            (8)  separator: the end of the optional fields is marked by a
+                 single hyphen.
+
+            (9)  filesystem type: the filesystem type in the form
+                 "type[.subtype]".
+
+            (10) mount source: filesystem-specific information or "none".
+
+            (11) super options: per-superblock options.
+
+        """
+        mount_entry_line = mount_entry_line.strip().split(' ')
+
+        (
+            mount_id,
+            parent_id,
+            _major_minor,
+            _parent_path,
+            target,
+            mnt_opts
+        ), data = mount_entry_line[:6], mount_entry_line[6:]
+
+        fields = []
+        while data[0] != '-':
+            fields.append(data.pop(0))
+
+        (
+            _,
+            fs_type,
+            source,
+            mnt_opts2
+        ) = data
+
+        mnt_opts = set(mnt_opts.split(',') + mnt_opts2.split(','))
+
+        return cls(source, target, fs_type, mnt_opts, mount_id, parent_id)
+
+def list_mounts():
+    """Read the current process' mounts.
+    """
+    mounts = []
+
+    try:
+        with open('/proc/self/mountinfo', 'r') as mf:
+            mounts_lines = mf.readlines()
+
+    except EnvironmentError as err:
+        if err.errno == errno.ENOENT:
+            _LOGGER.warning('Unable to read "/proc/self/mounts": %s', err)
+            return mounts
+        else:
+            raise
+
+    for mounts_line in mounts_lines:
+        mounts.append(MountEntry.mount_entry_parse(mounts_line))
+
+    return mounts
 
 ###############################################################################
+def cleanup_mounts(whitelist_patterns, ignore_exc=False):
+    """Prune all mount points except whitelisted ones.
+
+    :param ``bool`` ignore_exc:
+        If True, proceed in a best effort, only logging when unmount fails.
+    """
+    _LOGGER.info('Removing all mounts except %r', whitelist_patterns)
+    current_mounts = [mount_entry.mount_id for mount_entry in list_mounts()]
+
+    # We need to iterate over mounts in "layering" order.
+    mount_parents = {}
+    for mount_entry in current_mounts.values():
+        mount_parents.setdefault(
+            mount_entry.parent_id,
+            []
+        ).append(mount_entry.mount_id)
+
+    sorted_mounts = sorted(
+        [
+            (
+                len(mount_parents.get(mount_entry.mount_id, [])),
+                mount_entry
+            )
+            for mount_entry in current_mounts.values()
+        ]
+    )
+
+    for _, mount_entry in sorted_mounts:
+        is_valid = any(
+            [
+                mount_entry for whitelist_pat in whitelist_patterns
+                if fnmatch.fnmatchcase(mount_entry.target, whitelist_pat)
+            ]
+        )
+        if is_valid:
+            _LOGGER.info('Mount preserved: %r', mount_entry)
+        elif ignore_exc:
+            try:
+                unmount(mount_entry.target)
+            except OSError as err:
+                _LOGGER.warning('Failed to umount %r: %s',
+                                mount_entry.target, err)
+        else:
+            unmount(mount_entry.target)
+
+
 
 __all__ = [
     'MNT_DETACH',
@@ -319,6 +521,8 @@ __all__ = [
     'MS_SLAVE',
     'MS_SYNCHRONOUS',
     'MS_UNBINDABLE',
+    'MountEntry',
+    'cleanup_mounts',
     'mount',
-    'unmount',
+    'unmount'
 ]

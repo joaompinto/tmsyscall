@@ -1,25 +1,29 @@
-from tmsyscall.mount import mount, unmount
+from tmsyscall.mount import mount, unmount, list_mounts
 from tempfile import mkdtemp
+from shutil import rmtree
 
-def test_mount_umount():
+def test_list_mounts():
+    mount_info = [x for x in list_mounts() if x.target == '/proc']
+    assert len(mount_info) == 1
+    mount_info = mount_info[0]
+    assert mount_info.fs_type == 'proc'
+
+
+def test_mount():
     tmp_dir = mkdtemp()
     mount("/proc", tmp_dir, "proc")
-    with open("/proc/self/mountinfo") as mount_file:
-        mount_info = mount_file.read().splitlines()
+
     # Search for target
-    mount_record = [x for x in mount_info if x.split()[4] == tmp_dir]
-    assert len(mount_record) == 1
-    mount_record = mount_record[0].split()
-    # parent
-    assert mount_record[3] == '/'
-    # options
-    assert mount_record[5] == 'rw,relatime'
-    # fstype
-    assert mount_record[8] == 'proc'
-    # source
-    assert mount_record[9] == '/proc'
+    mount_info = [x for x in list_mounts() if x.target == tmp_dir]
+    assert len(mount_info) == 1
+    mount_info = mount_info[0]
+
+    assert mount_info.source == '/proc'
+    assert mount_info.mnt_opts == set([ 'relatime', 'rw'])
+    assert mount_info.fs_type == 'proc'
+
     unmount(tmp_dir)
-    with open("/proc/self/mountinfo") as mount_file:
-        mount_info = mount_file.read().splitlines()
-    mount_record = [x for x in mount_info if x.split()[4] == tmp_dir]
+    mount_info = [x for x in list_mounts() if x.target == tmp_dir]
+    mount_record = [x for x in list_mounts() if x.target == tmp_dir]
     assert not mount_record
+    rmtree(tmp_dir)
