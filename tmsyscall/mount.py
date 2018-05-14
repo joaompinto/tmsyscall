@@ -8,7 +8,6 @@ from __future__ import unicode_literals
 
 import itertools
 import logging
-import operator
 import os
 import errno
 import fnmatch
@@ -355,6 +354,22 @@ def mount_procfs(newroot, target='/proc'):
     )
 
 
+def mount_sysfs(newroot, target='/sys'):
+    """Mounts mount_sysfs on directory.
+    """
+    while target.startswith('/'):
+        target = target[1:]
+
+    mnt_flags = MS_RDONLY | MS_NODEV | MS_NOEXEC | MS_NOSUID |MS_RELATIME
+
+    return mount(
+        source='sysfs',
+        target=os.path.join(newroot, target),
+        fs_type='sysfs',
+        mnt_flags=mnt_flags,
+    )
+
+
 def mount_tmpfs(newroot, target, **mnt_opts):
     """Mounts directory on tmpfs.
     """
@@ -547,7 +562,7 @@ def cleanup_mounts(whitelist_patterns, ignore_exc=False):
             (len(mount_parents.get(mount_entry.mount_id, [])), mount_entry)
             for mount_entry in current_mounts
         ],
-        reverse = True
+        reverse=True
     )
 
     for _, mount_entry in sorted_mounts:
