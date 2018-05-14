@@ -1,6 +1,5 @@
 """
 Linux mount(2) API wrapper module.
-
 """
 
 from __future__ import absolute_import
