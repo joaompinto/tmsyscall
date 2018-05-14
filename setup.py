@@ -31,7 +31,7 @@ setup(
     version=open(join(name, 'version')).readline().strip("\r\n"),
     description=desc,
     long_description=long_desc,
-    #long_description_content_type='text/markdown',
+    long_description_content_type='text/markdown',
     author='João Pinto',
     author_email='lamego.pinto@gmail.com',
     classifiers=[x for x in classifiers.splitlines() if x],

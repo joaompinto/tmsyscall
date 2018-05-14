@@ -19,7 +19,7 @@ def test_mount():
     mount_info = mount_info[0]
 
     assert mount_info.source == '/proc'
-    assert mount_info.mnt_opts == set([ 'relatime', 'rw'])
+    assert mount_info.mnt_opts == set(['relatime', 'rw'])
     assert mount_info.fs_type == 'proc'
 
     unmount(tmp_dir)
