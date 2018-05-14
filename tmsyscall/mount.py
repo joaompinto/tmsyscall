@@ -229,7 +229,7 @@ MNT_EXPIRE = MNTFlags.EXPIRE
 ###############################################################################
 # Main mount/umount functions
 
-def mount(source, target, fs_type, mnt_flags=(), *mnt_opts_args, # pylint: disable=W1113
+def mount(source, target, fs_type, mnt_flags=0, *mnt_opts_args, # pylint: disable=W1113
           **mnt_opts_kwargs):
     """Mount ``source`` on ``target`` using filesystem type ``fs_type`` and
     mount flags ``mnt_flags``.
@@ -250,13 +250,6 @@ def mount(source, target, fs_type, mnt_flags=(), *mnt_opts_args, # pylint: disab
     if fs_type is not None:
         fs_type = fs_type.encode()
 
-    # Fix up mount flags
-    mnt_flags = utils.get_iterable(mnt_flags)
-    flags = int(
-        six.moves.reduce(
-            operator.or_, mnt_flags, MS_MGC_VAL
-        )
-    )
     # Fix up mount options
     options = ','.join(
         itertools.chain(
@@ -274,12 +267,13 @@ def mount(source, target, fs_type, mnt_flags=(), *mnt_opts_args, # pylint: disab
 
     _LOGGER.debug('mount(%r, %r, %r, %r, %r)',
                   source, target, fs_type,
-                  utils.parse_mask(flags, MSFlags), options)
-
-    return _mount(source, target, fs_type, flags, options)
+                  utils.parse_mask(mnt_flags, MSFlags), options)
 
 
-def unmount(target, mnt_flags=()):
+    return _mount(source, target, fs_type, mnt_flags, options)
+
+
+def unmount(target, mnt_flags=0):
     """Umount ``target``.
     """
     target = target.encode()
@@ -344,7 +338,7 @@ def mount_bind(newroot, target, source=None, recursive=True, read_only=True):
     if res == 0 and read_only:
         res = mount(
             source=None, target=target_fp,
-            fs_type=None, mnt_flags=(MS_BIND, MS_RDONLY, MS_REMOUNT)
+            fs_type=None, mnt_flags=MS_BIND | MS_RDONLY | MS_REMOUNT
         )
 
     return res

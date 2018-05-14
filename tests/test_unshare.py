@@ -1,10 +1,14 @@
-from tmsyscall.unshare import *
-from tmsyscall.mount import *
+from __future__ import print_function
+from tmsyscall.unshare import unshare, CLONE_NEWPID, CLONE_NEWNS
+from tmsyscall.mount import  mount, mount_procfs, unmount
+from tmsyscall.mount import MS_SLAVE, MS_REC, MS_BIND, MS_PRIVATE, MNT_DETACH
+from tmsyscall.pivot_root import pivot_root
+from os.path import exists
 import os
 
 def test_unshare():
 
-    container_root = '/tmp/x'
+    container_root = '/home/janito/containers/'
 
     # Detach from the system-wide mount table
     # cleanup_mounts([container_root + '*'], ignore_exc=True)
@@ -15,8 +19,18 @@ def test_unshare():
     # root after pivot_root. Note that changing the pid namespace affects only
     # the children (namely, which namespace they will be put in). It is thread
     # safe because unshare() affects the calling thread only.
-    unshare(CLONE_NEWPID)
-    #mount_procfs(container_root)
-    os.execl('/bin/bash', 'bash')
+    unshare(CLONE_NEWPID|CLONE_NEWNS)
+    oldroot = os.path.join(container_root, 'host')
+    if not exists(oldroot):
+        os.makedirs(oldroot)
+    mount('none', "/", None, MS_REC | MS_PRIVATE)
+    mount(container_root, container_root, None, MS_BIND | MS_REC)
+    os.chdir(container_root)
+    pivot_root('.', 'mnt')
+    unmount('mnt', MNT_DETACH)
+    os.chroot('.')
+    mount_procfs("/proc")
+    os.execl('/bin/bash', 'ls')
+    unmount(container_root)
 
     print("We are ok nout")
