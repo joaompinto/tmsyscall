@@ -278,11 +278,6 @@ def unmount(target, mnt_flags=0):
     """
     target = target.encode()
 
-    mnt_flags = utils.get_iterable(mnt_flags)
-    mnt_flags = six.moves.reduce(
-        operator.or_, mnt_flags, 0
-    )
-
     _LOGGER.debug('umount(%r, %r)',
                   target, utils.parse_mask(mnt_flags, MNTFlags))
 
@@ -350,12 +345,7 @@ def mount_procfs(newroot, target='/proc'):
     while target.startswith('/'):
         target = target[1:]
 
-    mnt_flags = [
-        MS_NODEV,
-        MS_NOEXEC,
-        MS_NOSUID,
-        MS_RELATIME,
-    ]
+    mnt_flags = MS_NODEV | MS_NOEXEC | MS_NOSUID |MS_RELATIME
 
     return mount(
         source='proc',
@@ -371,12 +361,7 @@ def mount_tmpfs(newroot, target, **mnt_opts):
     while target.startswith('/'):
         target = target[1:]
 
-    mnt_flags = [
-        MS_NODEV,
-        MS_NOEXEC,
-        MS_NOSUID,
-        MS_RELATIME,
-    ]
+    mnt_flags = MS_NODEV | MS_NOEXEC | MS_NOSUID, MS_RELATIME
 
     return mount(
         source='tmpfs',
@@ -561,7 +546,8 @@ def cleanup_mounts(whitelist_patterns, ignore_exc=False):
         [
             (len(mount_parents.get(mount_entry.mount_id, [])), mount_entry)
             for mount_entry in current_mounts
-        ]
+        ],
+        reverse = True
     )
 
     for _, mount_entry in sorted_mounts:

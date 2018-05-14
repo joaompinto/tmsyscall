@@ -31,7 +31,7 @@ setup(
     version=open(join(name, 'version')).readline().strip("\r\n"),
     description=desc,
     long_description=long_desc,
-    long_description_content_type='text/markdown',
+    #long_description_content_type='text/markdown',
     author='João Pinto',
     author_email='lamego.pinto@gmail.com',
     classifiers=[x for x in classifiers.splitlines() if x],
@@ -40,5 +40,5 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     entry_points={'console_scripts':[name + ' = ' + name + '.__main__:main']},
-    python_requires='>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, <4',
+    #python_requires='>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, <4',
 )
