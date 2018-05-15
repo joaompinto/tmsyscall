@@ -1,0 +1,693 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>tmsyscall.mount &#8212; tmsyscall 0.0.0 documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <h1>Source code for tmsyscall.mount</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Linux mount(2) API wrapper module.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">__future__</span> <span class="k">import</span> <span class="n">absolute_import</span>
+<span class="kn">from</span> <span class="nn">__future__</span> <span class="k">import</span> <span class="n">division</span>
+<span class="kn">from</span> <span class="nn">__future__</span> <span class="k">import</span> <span class="n">print_function</span>
+<span class="kn">from</span> <span class="nn">__future__</span> <span class="k">import</span> <span class="n">unicode_literals</span>
+
+<span class="kn">import</span> <span class="nn">itertools</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">errno</span>
+<span class="kn">import</span> <span class="nn">fnmatch</span>
+
+<span class="kn">import</span> <span class="nn">ctypes</span>
+<span class="kn">from</span> <span class="nn">ctypes</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">c_int</span><span class="p">,</span>
+    <span class="n">c_char_p</span><span class="p">,</span>
+    <span class="n">c_ulong</span><span class="p">,</span>
+    <span class="n">c_void_p</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">ctypes.util</span> <span class="k">import</span> <span class="n">find_library</span>
+
+<span class="kn">import</span> <span class="nn">enum</span>
+<span class="kn">import</span> <span class="nn">six</span>
+
+<span class="kn">from</span> <span class="nn">tmsyscall</span> <span class="k">import</span> <span class="n">utils</span>
+
+<span class="n">_LOGGER</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="c1">###############################################################################</span>
+<span class="c1"># Map the C interface</span>
+
+<span class="n">_LIBC_PATH</span> <span class="o">=</span> <span class="n">find_library</span><span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">)</span>
+<span class="n">_LIBC</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CDLL</span><span class="p">(</span><span class="n">_LIBC_PATH</span><span class="p">,</span> <span class="n">use_errno</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="p">(</span><span class="ow">not</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_LIBC</span><span class="p">,</span> <span class="s1">&#39;mount&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">or</span>
+        <span class="ow">not</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_LIBC</span><span class="p">,</span> <span class="s1">&#39;umount&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">or</span>
+        <span class="ow">not</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_LIBC</span><span class="p">,</span> <span class="s1">&#39;umount2&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)):</span>
+    <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s1">&#39;Unsupported libc version found: </span><span class="si">%s</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">_LIBC_PATH</span><span class="p">)</span>
+
+
+<span class="c1"># int mount(const char *source, const char *target,</span>
+<span class="c1">#           const char *filesystemtype, unsigned long mountflags,</span>
+<span class="c1">#           const void *data);</span>
+<span class="n">_MOUNT_DECL</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CFUNCTYPE</span><span class="p">(</span>
+    <span class="n">c_int</span><span class="p">,</span>
+    <span class="n">c_char_p</span><span class="p">,</span>  <span class="c1"># source</span>
+    <span class="n">c_char_p</span><span class="p">,</span>  <span class="c1"># target</span>
+    <span class="n">c_char_p</span><span class="p">,</span>  <span class="c1"># filesystem type</span>
+    <span class="n">c_ulong</span><span class="p">,</span>   <span class="c1"># mount flags</span>
+    <span class="n">c_void_p</span><span class="p">,</span>  <span class="c1"># data</span>
+    <span class="n">use_errno</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="n">_MOUNT</span> <span class="o">=</span> <span class="n">_MOUNT_DECL</span><span class="p">((</span><span class="s1">&#39;mount&#39;</span><span class="p">,</span> <span class="n">_LIBC</span><span class="p">))</span>
+
+
+<span class="k">def</span> <span class="nf">_mount</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">_MOUNT</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">res</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">errno</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">get_errno</span><span class="p">()</span>
+        <span class="k">raise</span> <span class="ne">OSError</span><span class="p">(</span>
+            <span class="n">errno</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">strerror</span><span class="p">(</span><span class="n">errno</span><span class="p">),</span>
+            <span class="s1">&#39;mount(</span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">, 0x</span><span class="si">%x</span><span class="s1">, </span><span class="si">%r</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="p">(</span>
+                <span class="n">source</span><span class="p">,</span>
+                <span class="n">target</span><span class="p">,</span>
+                <span class="n">fs_type</span><span class="p">,</span>
+                <span class="n">mnt_flags</span><span class="p">,</span>
+                <span class="n">data</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">res</span>
+
+
+<span class="c1"># int umount(const char *target);</span>
+<span class="n">_UMOUNT_DECL</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CFUNCTYPE</span><span class="p">(</span>
+    <span class="n">c_int</span><span class="p">,</span>
+    <span class="n">c_char_p</span><span class="p">,</span>  <span class="c1"># target</span>
+    <span class="n">use_errno</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="n">_UMOUNT</span> <span class="o">=</span> <span class="n">_UMOUNT_DECL</span><span class="p">((</span><span class="s1">&#39;umount&#39;</span><span class="p">,</span> <span class="n">_LIBC</span><span class="p">))</span>
+
+<span class="c1"># int umount2(const char *target, int flags);</span>
+<span class="n">_UMOUNT2_DECL</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CFUNCTYPE</span><span class="p">(</span>
+    <span class="n">c_int</span><span class="p">,</span>
+    <span class="n">c_char_p</span><span class="p">,</span>  <span class="c1"># target</span>
+    <span class="n">c_int</span><span class="p">,</span>     <span class="c1"># flags</span>
+    <span class="n">use_errno</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="n">_UMOUNT2</span> <span class="o">=</span> <span class="n">_UMOUNT2_DECL</span><span class="p">((</span><span class="s1">&#39;umount2&#39;</span><span class="p">,</span> <span class="n">_LIBC</span><span class="p">))</span>
+
+
+<span class="k">def</span> <span class="nf">_umount</span><span class="p">(</span><span class="n">target</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Umount ``target``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">_UMOUNT</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">res</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">errno</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">get_errno</span><span class="p">()</span>
+        <span class="k">raise</span> <span class="ne">OSError</span><span class="p">(</span>
+            <span class="n">errno</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">strerror</span><span class="p">(</span><span class="n">errno</span><span class="p">),</span>
+            <span class="s1">&#39;umount(</span><span class="si">%r</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="p">)</span>
+        <span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_umount2</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">flags</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">_UMOUNT2</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">flags</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">res</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">errno</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">get_errno</span><span class="p">()</span>
+        <span class="k">raise</span> <span class="ne">OSError</span><span class="p">(</span>
+            <span class="n">errno</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">strerror</span><span class="p">(</span><span class="n">errno</span><span class="p">),</span>
+            <span class="s1">&#39;umount2(</span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">flags</span><span class="p">)</span>
+        <span class="p">)</span>
+
+
+<span class="c1">###############################################################################</span>
+<span class="c1"># NOTE: below values taken from mount kernel interface sys/mount.h</span>
+
+<span class="k">class</span> <span class="nc">MSFlags</span><span class="p">(</span><span class="n">enum</span><span class="o">.</span><span class="n">IntEnum</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;All mount flags.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1">#: MS_MGC_VAL is a flag marker, needs to be included in all calls.</span>
+    <span class="n">MGC_VAL</span> <span class="o">=</span> <span class="mh">0xC0ED0000</span>
+
+    <span class="c1">#: Mount read-only.</span>
+    <span class="n">RDONLY</span> <span class="o">=</span> <span class="mh">0x000001</span>
+    <span class="c1">#: Ignore suid and sgid bits.</span>
+    <span class="n">NOSUID</span> <span class="o">=</span> <span class="mh">0x000002</span>
+    <span class="c1">#: Disallow access to device special files.</span>
+    <span class="n">NODEV</span> <span class="o">=</span> <span class="mh">0x000004</span>
+    <span class="c1">#: Disallow program execution.</span>
+    <span class="n">NOEXEC</span> <span class="o">=</span> <span class="mh">0x000008</span>
+    <span class="c1">#: Writes are synced at once.</span>
+    <span class="n">SYNCHRONOUS</span> <span class="o">=</span> <span class="mh">0x000010</span>
+    <span class="c1">#: Alter flags of a mounted FS.</span>
+    <span class="n">REMOUNT</span> <span class="o">=</span> <span class="mh">0x000020</span>
+    <span class="c1">#: Allow mandatory locks on an FS.</span>
+    <span class="n">MANDLOCK</span> <span class="o">=</span> <span class="mh">0x000040</span>
+    <span class="c1">#: Directory modifications are synchronous.</span>
+    <span class="n">DIRSYNC</span> <span class="o">=</span> <span class="mh">0x000080</span>
+    <span class="c1">#: Update atime relative to mtime/ctime</span>
+    <span class="n">RELATIME</span> <span class="o">=</span> <span class="mh">0x200000</span>
+    <span class="c1">#: Do not update access times.</span>
+    <span class="n">NOATIME</span> <span class="o">=</span> <span class="mh">0x000400</span>
+    <span class="c1">#: Do not update directory access times.</span>
+    <span class="n">NODIRATIME</span> <span class="o">=</span> <span class="mh">0x000800</span>
+    <span class="c1">#: Bind a mount point to a different place .</span>
+    <span class="n">BIND</span> <span class="o">=</span> <span class="mh">0x001000</span>
+    <span class="c1">#: Move a mount point to a different place .</span>
+    <span class="n">MOVE</span> <span class="o">=</span> <span class="mh">0x002000</span>
+    <span class="c1">#: Recursively apply the UNBINDABLE, PRIVATE, SLAVE, or SHARED flags.</span>
+    <span class="n">REC</span> <span class="o">=</span> <span class="mh">0x004000</span>
+
+    <span class="c1"># See https://www.kernel.org/doc/Documentation/filesystems/sharedsubtree.txt</span>
+    <span class="c1">#</span>
+    <span class="c1">#: unbindable mount</span>
+    <span class="n">UNBINDABLE</span> <span class="o">=</span> <span class="mh">0x020000</span>
+    <span class="c1">#: private mount</span>
+    <span class="n">PRIVATE</span> <span class="o">=</span> <span class="mh">0x040000</span>
+    <span class="c1">#: slave mount</span>
+    <span class="n">SLAVE</span> <span class="o">=</span> <span class="mh">0x080000</span>
+    <span class="c1">#: shared mount</span>
+    <span class="n">SHARED</span> <span class="o">=</span> <span class="mh">0x100000</span>
+
+
+<span class="c1">#: Mount flag marker.</span>
+<span class="n">MS_MGC_VAL</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">MGC_VAL</span>
+
+<span class="c1">#: Mount read-only.</span>
+<span class="n">MS_RDONLY</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">RDONLY</span>
+<span class="c1">#: Ignore suid and sgid bits.</span>
+<span class="n">MS_NOSUID</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">NOSUID</span>
+<span class="c1">#: Disallow access to device special files.</span>
+<span class="n">MS_NODEV</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">NODEV</span>
+<span class="c1">#: Disallow program execution.</span>
+<span class="n">MS_NOEXEC</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">NOEXEC</span>
+<span class="c1">#: Writes are synced at once.</span>
+<span class="n">MS_SYNCHRONOUS</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">SYNCHRONOUS</span>
+<span class="c1">#: Alter flags of a mounted FS.</span>
+<span class="n">MS_REMOUNT</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">REMOUNT</span>
+<span class="c1">#: Allow mandatory locks on an FS.</span>
+<span class="n">MS_MANDLOCK</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">MANDLOCK</span>
+<span class="c1">#: Directory modifications are synchronous.</span>
+<span class="n">MS_DIRSYNC</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">DIRSYNC</span>
+<span class="c1">#: Update atime relative to mtime/ctime</span>
+<span class="n">MS_RELATIME</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">RELATIME</span>
+<span class="c1">#: Do not update access times.</span>
+<span class="n">MS_NOATIME</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">NOATIME</span>
+<span class="c1">#: Do not update directory access times.</span>
+<span class="n">MS_NODIRATIME</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">NODIRATIME</span>
+<span class="c1">#: Bind a mount point to a different place .</span>
+<span class="n">MS_BIND</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">BIND</span>
+<span class="c1">#: Move a mount point to a different place .</span>
+<span class="n">MS_MOVE</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">MOVE</span>
+<span class="c1">#: Recursively apply the UNBINDABLE, PRIVATE, SLAVE, or SHARED flags.</span>
+<span class="n">MS_REC</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">REC</span>
+
+<span class="c1"># See https://www.kernel.org/doc/Documentation/filesystems/sharedsubtree.txt</span>
+<span class="c1">#: unbindable mount</span>
+<span class="n">MS_UNBINDABLE</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">UNBINDABLE</span>
+<span class="c1">#: private mount</span>
+<span class="n">MS_PRIVATE</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">PRIVATE</span>
+<span class="c1">#: slave mount</span>
+<span class="n">MS_SLAVE</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">SLAVE</span>
+<span class="c1">#: shared mount</span>
+<span class="n">MS_SHARED</span> <span class="o">=</span> <span class="n">MSFlags</span><span class="o">.</span><span class="n">SHARED</span>
+
+
+<span class="k">class</span> <span class="nc">MNTFlags</span><span class="p">(</span><span class="n">enum</span><span class="o">.</span><span class="n">IntEnum</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;All umount2 operations flags.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1">#: Force unmounting</span>
+    <span class="n">FORCE</span> <span class="o">=</span> <span class="mh">0x1</span>
+    <span class="c1">#: Just detach from the tree</span>
+    <span class="n">DETACH</span> <span class="o">=</span> <span class="mh">0x2</span>
+    <span class="c1">#: Mark for expiry</span>
+    <span class="n">EXPIRE</span> <span class="o">=</span> <span class="mh">0x4</span>
+
+
+<span class="c1">#: Force unmounting</span>
+<span class="n">MNT_FORCE</span> <span class="o">=</span> <span class="n">MNTFlags</span><span class="o">.</span><span class="n">FORCE</span>
+<span class="c1">#: Just detach from the tree</span>
+<span class="n">MNT_DETACH</span> <span class="o">=</span> <span class="n">MNTFlags</span><span class="o">.</span><span class="n">DETACH</span>
+<span class="c1">#: Mark for expiry</span>
+<span class="n">MNT_EXPIRE</span> <span class="o">=</span> <span class="n">MNTFlags</span><span class="o">.</span><span class="n">EXPIRE</span>
+
+
+<span class="c1">###############################################################################</span>
+<span class="c1"># Main mount/umount functions</span>
+
+<div class="viewcode-block" id="mount"><a class="viewcode-back" href="../../tmsyscall.html#tmsyscall.mount.mount">[docs]</a><span class="k">def</span> <span class="nf">mount</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="o">*</span><span class="n">mnt_opts_args</span><span class="p">,</span> <span class="c1"># pylint: disable=W1113</span>
+          <span class="o">**</span><span class="n">mnt_opts_kwargs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Mount ``source`` on ``target`` using filesystem type ``fs_type`` and</span>
+<span class="sd">    mount flags ``mnt_flags``.</span>
+
+<span class="sd">    NOTE: Mount data argument is not supported.</span>
+
+<span class="sd">    :params `str` source:</span>
+<span class="sd">        What to mount</span>
+<span class="sd">    :params `str` target:</span>
+<span class="sd">        Where to mount it</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">source</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">source</span> <span class="o">=</span> <span class="n">source</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">target</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">source</span>
+    <span class="k">if</span> <span class="n">fs_type</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fs_type</span> <span class="o">=</span> <span class="n">fs_type</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+
+    <span class="c1"># Fix up mount options</span>
+    <span class="n">options</span> <span class="o">=</span> <span class="s1">&#39;,&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">itertools</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span>
+            <span class="n">mnt_opts_args</span><span class="p">,</span>
+            <span class="p">(</span>
+                <span class="s1">&#39;</span><span class="si">%s</span><span class="s1">=</span><span class="si">%s</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+                <span class="k">for</span> <span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">mnt_opts_kwargs</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">options</span><span class="p">:</span>
+        <span class="n">options</span> <span class="o">=</span> <span class="n">options</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">options</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="n">_LOGGER</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;mount(</span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">)&#39;</span><span class="p">,</span>
+                  <span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span>
+                  <span class="n">utils</span><span class="o">.</span><span class="n">parse_mask</span><span class="p">(</span><span class="n">mnt_flags</span><span class="p">,</span> <span class="n">MSFlags</span><span class="p">),</span> <span class="n">options</span><span class="p">)</span>
+
+
+    <span class="k">return</span> <span class="n">_mount</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="p">,</span> <span class="n">options</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="unmount"><a class="viewcode-back" href="../../tmsyscall.html#tmsyscall.mount.unmount">[docs]</a><span class="k">def</span> <span class="nf">unmount</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Umount ``target``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+
+    <span class="n">_LOGGER</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;umount(</span><span class="si">%r</span><span class="s1">, </span><span class="si">%r</span><span class="s1">)&#39;</span><span class="p">,</span>
+                  <span class="n">target</span><span class="p">,</span> <span class="n">utils</span><span class="o">.</span><span class="n">parse_mask</span><span class="p">(</span><span class="n">mnt_flags</span><span class="p">,</span> <span class="n">MNTFlags</span><span class="p">))</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">mnt_flags</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_umount</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_umount2</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="p">)</span></div>
+
+<span class="k">def</span> <span class="nf">mount_move</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">source</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Move a mount from one to a point to another.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">mount</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="o">=</span><span class="p">[</span><span class="n">MS_MOVE</span><span class="p">])</span>
+
+
+<span class="k">def</span> <span class="nf">mount_bind</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">recursive</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">read_only</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Bind mounts `source` to `newroot/target` so that `source` is accessed</span>
+<span class="sd">    when reaching `newroot/target`.</span>
+
+<span class="sd">    If a directory, the source will be mounted using --rbind.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Ensure root directory exists</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">newroot</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s1">&#39;Path </span><span class="si">%r</span><span class="s1"> does not exist&#39;</span> <span class="o">%</span> <span class="n">newroot</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">source</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">source</span> <span class="o">=</span> <span class="n">target</span>
+
+    <span class="n">target</span> <span class="o">=</span> <span class="n">utils</span><span class="o">.</span><span class="n">norm_safe</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+    <span class="n">source</span> <span class="o">=</span> <span class="n">utils</span><span class="o">.</span><span class="n">norm_safe</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+
+    <span class="c1"># Make sure target directory exists.</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">source</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s1">&#39;Source path </span><span class="si">%r</span><span class="s1"> does not exist&#39;</span> <span class="o">%</span> <span class="n">source</span><span class="p">)</span>
+
+    <span class="n">mnt_flags</span> <span class="o">=</span> <span class="p">[</span><span class="n">MS_BIND</span><span class="p">]</span>
+
+    <span class="c1"># Use --rbind for directories and --bind for files.</span>
+    <span class="k">if</span> <span class="n">recursive</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">source</span><span class="p">):</span>
+        <span class="n">mnt_flags</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">MS_REC</span><span class="p">)</span>
+
+    <span class="c1"># Strip leading /, ensure that mount is relative path.</span>
+    <span class="k">while</span> <span class="n">target</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">):</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+
+    <span class="c1"># Create mount directory, make sure it does not exists.</span>
+    <span class="n">target_fp</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">source</span><span class="p">):</span>
+        <span class="n">utils</span><span class="o">.</span><span class="n">mkdir_safe</span><span class="p">(</span><span class="n">target_fp</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">utils</span><span class="o">.</span><span class="n">mkfile_safe</span><span class="p">(</span><span class="n">target_fp</span><span class="p">)</span>
+
+    <span class="n">res</span> <span class="o">=</span> <span class="n">mount</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">target_fp</span><span class="p">,</span> <span class="n">fs_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="o">=</span><span class="n">mnt_flags</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">res</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">read_only</span><span class="p">:</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">mount</span><span class="p">(</span>
+            <span class="n">source</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">target_fp</span><span class="p">,</span>
+            <span class="n">fs_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mnt_flags</span><span class="o">=</span><span class="n">MS_BIND</span> <span class="o">|</span> <span class="n">MS_RDONLY</span> <span class="o">|</span> <span class="n">MS_REMOUNT</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">res</span>
+
+
+<div class="viewcode-block" id="mount_procfs"><a class="viewcode-back" href="../../tmsyscall.html#tmsyscall.mount.mount_procfs">[docs]</a><span class="k">def</span> <span class="nf">mount_procfs</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s1">&#39;/proc&#39;</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Mounts procfs on directory.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">while</span> <span class="n">target</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">):</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+
+    <span class="n">mnt_flags</span> <span class="o">=</span> <span class="n">MS_NODEV</span> <span class="o">|</span> <span class="n">MS_NOEXEC</span> <span class="o">|</span> <span class="n">MS_NOSUID</span> <span class="o">|</span><span class="n">MS_RELATIME</span>
+
+    <span class="k">return</span> <span class="n">mount</span><span class="p">(</span>
+        <span class="n">source</span><span class="o">=</span><span class="s1">&#39;proc&#39;</span><span class="p">,</span>
+        <span class="n">target</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="p">),</span>
+        <span class="n">fs_type</span><span class="o">=</span><span class="s1">&#39;proc&#39;</span><span class="p">,</span>
+        <span class="n">mnt_flags</span><span class="o">=</span><span class="n">mnt_flags</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+<span class="k">def</span> <span class="nf">mount_sysfs</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s1">&#39;/sys&#39;</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Mounts mount_sysfs on directory.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">while</span> <span class="n">target</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">):</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+
+    <span class="n">mnt_flags</span> <span class="o">=</span> <span class="n">MS_RDONLY</span> <span class="o">|</span> <span class="n">MS_NODEV</span> <span class="o">|</span> <span class="n">MS_NOEXEC</span> <span class="o">|</span> <span class="n">MS_NOSUID</span> <span class="o">|</span><span class="n">MS_RELATIME</span>
+
+    <span class="k">return</span> <span class="n">mount</span><span class="p">(</span>
+        <span class="n">source</span><span class="o">=</span><span class="s1">&#39;sysfs&#39;</span><span class="p">,</span>
+        <span class="n">target</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="p">),</span>
+        <span class="n">fs_type</span><span class="o">=</span><span class="s1">&#39;sysfs&#39;</span><span class="p">,</span>
+        <span class="n">mnt_flags</span><span class="o">=</span><span class="n">mnt_flags</span><span class="p">,</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">mount_tmpfs</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="o">**</span><span class="n">mnt_opts</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Mounts directory on tmpfs.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">while</span> <span class="n">target</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">):</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+
+    <span class="n">mnt_flags</span> <span class="o">=</span> <span class="n">MS_NODEV</span> <span class="o">|</span> <span class="n">MS_NOEXEC</span> <span class="o">|</span> <span class="n">MS_NOSUID</span><span class="p">,</span> <span class="n">MS_RELATIME</span>
+
+    <span class="k">return</span> <span class="n">mount</span><span class="p">(</span>
+        <span class="n">source</span><span class="o">=</span><span class="s1">&#39;tmpfs&#39;</span><span class="p">,</span>
+        <span class="n">target</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">newroot</span><span class="p">,</span> <span class="n">target</span><span class="p">),</span>
+        <span class="n">fs_type</span><span class="o">=</span><span class="s1">&#39;tmpfs&#39;</span><span class="p">,</span>
+        <span class="n">mnt_flags</span><span class="o">=</span><span class="n">mnt_flags</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">mnt_opts</span>
+    <span class="p">)</span>
+
+<div class="viewcode-block" id="MountEntry"><a class="viewcode-back" href="../../tmsyscall.html#tmsyscall.mount.MountEntry">[docs]</a><span class="k">class</span> <span class="nc">MountEntry</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Mount table entry data.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s1">&#39;source&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;target&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;fs_type&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;mnt_opts&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;mount_id&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;parent_id&#39;</span>
+    <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span> <span class="n">mnt_opts</span><span class="p">,</span> <span class="n">mount_id</span><span class="p">,</span> <span class="n">parent_id</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">source</span> <span class="o">=</span> <span class="n">source</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target</span> <span class="o">=</span> <span class="n">target</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fs_type</span> <span class="o">=</span> <span class="n">fs_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mnt_opts</span> <span class="o">=</span> <span class="n">mnt_opts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mount_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">mount_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">parent_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">parent_id</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="s1">&#39;</span><span class="si">{name}</span><span class="s1">(source=</span><span class="si">{src!r}</span><span class="s1">, target=</span><span class="si">{target!r}</span><span class="s1">, &#39;</span>
+            <span class="s1">&#39;fs_type=</span><span class="si">{fs_type!r}</span><span class="s1">, mnt_opts=</span><span class="si">{mnt_opts!r}</span><span class="s1">)&#39;</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+            <span class="n">src</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">source</span><span class="p">,</span>
+            <span class="n">target</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">target</span><span class="p">,</span>
+            <span class="n">fs_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fs_type</span><span class="p">,</span>
+            <span class="n">mnt_opts</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">mnt_opts</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__lt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Ordering is based on mount target.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">target</span> <span class="o">&lt;</span> <span class="n">other</span><span class="o">.</span><span class="n">target</span>
+
+    <span class="k">def</span> <span class="nf">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Equality is defined as the equality of the mount entry&#39;s attributes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mount_id</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">mount_id</span><span class="p">)</span> <span class="ow">and</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">parent_id</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">parent_id</span><span class="p">)</span> <span class="ow">and</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">source</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">source</span><span class="p">)</span> <span class="ow">and</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">target</span><span class="p">)</span> <span class="ow">and</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fs_type</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">fs_type</span><span class="p">)</span> <span class="ow">and</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mnt_opts</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">mnt_opts</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">res</span>
+
+<div class="viewcode-block" id="MountEntry.mount_entry_parse"><a class="viewcode-back" href="../../tmsyscall.html#tmsyscall.mount.MountEntry.mount_entry_parse">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">mount_entry_parse</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">mount_entry_line</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Create a `:class:MountEntry from a mountinfo data line.</span>
+
+<span class="sd">        The file contains lines of the form:</span>
+
+<span class="sd">            36 35 98:0 /mnt1 /mnt2 rw,noatime master:1</span>
+<span class="sd">                                            - ext3 /dev/root rw,errors=continue</span>
+<span class="sd">            (1)(2)(3)   (4)   (5)      (6)      (7)</span>
+<span class="sd">                                           (8) (9)   (10)         (11)</span>
+
+<span class="sd">        The numbers in parentheses are labels for the descriptions</span>
+<span class="sd">        below:</span>
+
+<span class="sd">            (1)  mount ID: a unique ID for the mount (may be reused after</span>
+<span class="sd">                 umount(2)).</span>
+
+<span class="sd">            (2)  parent ID: the ID of the parent mount (or of self for the</span>
+<span class="sd">                 root of this mount namespace&#39;s mount tree).</span>
+
+<span class="sd">                 If the parent mount point lies outside the process&#39;s root</span>
+<span class="sd">                 directory (see chroot(2)), the ID shown here won&#39;t have a</span>
+<span class="sd">                 corresponding record in mountinfo whose mount ID (field</span>
+<span class="sd">                 1) matches this parent mount ID (because mount points</span>
+<span class="sd">                 that lie outside the process&#39;s root directory are not</span>
+<span class="sd">                 shown in mountinfo).  As a special case of this point,</span>
+<span class="sd">                 the process&#39;s root mount point may have a parent mount</span>
+<span class="sd">                 (for the initramfs filesystem) that lies outside the</span>
+<span class="sd">                 process&#39;s root directory, and an entry for that mount</span>
+<span class="sd">                 point will not appear in mountinfo.</span>
+
+<span class="sd">            (3)  major:minor: the value of st_dev for files on this</span>
+<span class="sd">                 filesystem (see stat(2)).</span>
+
+<span class="sd">            (4)  root: the pathname of the directory in the filesystem</span>
+<span class="sd">                 which forms the root of this mount.</span>
+
+<span class="sd">            (5)  mount point: the pathname of the mount point relative to</span>
+<span class="sd">                 the process&#39;s root directory.</span>
+
+<span class="sd">            (6)  mount options: per-mount options.</span>
+
+<span class="sd">            (7)  optional fields: zero or more fields of the form</span>
+<span class="sd">                 &quot;tag[:value]&quot;; see below.</span>
+
+<span class="sd">            (8)  separator: the end of the optional fields is marked by a</span>
+<span class="sd">                 single hyphen.</span>
+
+<span class="sd">            (9)  filesystem type: the filesystem type in the form</span>
+<span class="sd">                 &quot;type[.subtype]&quot;.</span>
+
+<span class="sd">            (10) mount source: filesystem-specific information or &quot;none&quot;.</span>
+
+<span class="sd">            (11) super options: per-superblock options.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">mount_entry_line</span> <span class="o">=</span> <span class="n">mount_entry_line</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)</span>
+
+        <span class="p">(</span>
+            <span class="n">mount_id</span><span class="p">,</span>
+            <span class="n">parent_id</span><span class="p">,</span>
+            <span class="n">_major_minor</span><span class="p">,</span>
+            <span class="n">_parent_path</span><span class="p">,</span>
+            <span class="n">target</span><span class="p">,</span>
+            <span class="n">mnt_opts</span>
+        <span class="p">),</span> <span class="n">data</span> <span class="o">=</span> <span class="n">mount_entry_line</span><span class="p">[:</span><span class="mi">6</span><span class="p">],</span> <span class="n">mount_entry_line</span><span class="p">[</span><span class="mi">6</span><span class="p">:]</span>
+
+        <span class="n">fields</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">while</span> <span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="s1">&#39;-&#39;</span><span class="p">:</span>
+            <span class="n">fields</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+
+        <span class="p">(</span>
+            <span class="n">_</span><span class="p">,</span>
+            <span class="n">fs_type</span><span class="p">,</span>
+            <span class="n">source</span><span class="p">,</span>
+            <span class="n">mnt_opts2</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">data</span>
+
+        <span class="n">mnt_opts</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">mnt_opts</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span> <span class="o">+</span> <span class="n">mnt_opts2</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">fs_type</span><span class="p">,</span> <span class="n">mnt_opts</span><span class="p">,</span> <span class="n">mount_id</span><span class="p">,</span> <span class="n">parent_id</span><span class="p">)</span></div></div>
+
+<span class="k">def</span> <span class="nf">list_mounts</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Read the current process&#39; mounts.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mounts</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s1">&#39;/proc/self/mountinfo&#39;</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">mf</span><span class="p">:</span>
+            <span class="n">mounts_lines</span> <span class="o">=</span> <span class="n">mf</span><span class="o">.</span><span class="n">readlines</span><span class="p">()</span>
+
+    <span class="k">except</span> <span class="ne">EnvironmentError</span> <span class="k">as</span> <span class="n">err</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">err</span><span class="o">.</span><span class="n">errno</span> <span class="o">==</span> <span class="n">errno</span><span class="o">.</span><span class="n">ENOENT</span><span class="p">:</span>
+            <span class="n">_LOGGER</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s1">&#39;Unable to read &quot;/proc/self/mounts&quot;: </span><span class="si">%s</span><span class="s1">&#39;</span><span class="p">,</span> <span class="n">err</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">mounts</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span>
+
+    <span class="k">for</span> <span class="n">mounts_line</span> <span class="ow">in</span> <span class="n">mounts_lines</span><span class="p">:</span>
+        <span class="n">mounts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">MountEntry</span><span class="o">.</span><span class="n">mount_entry_parse</span><span class="p">(</span><span class="n">mounts_line</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">mounts</span>
+
+<span class="c1">###############################################################################</span>
+<div class="viewcode-block" id="cleanup_mounts"><a class="viewcode-back" href="../../tmsyscall.html#tmsyscall.mount.cleanup_mounts">[docs]</a><span class="k">def</span> <span class="nf">cleanup_mounts</span><span class="p">(</span><span class="n">whitelist_patterns</span><span class="p">,</span> <span class="n">ignore_exc</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Prune all mount points except whitelisted ones.</span>
+
+<span class="sd">    :param ``bool`` ignore_exc:</span>
+<span class="sd">        If True, proceed in a best effort, only logging when unmount fails.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">_LOGGER</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Removing all mounts except </span><span class="si">%r</span><span class="s1">&#39;</span><span class="p">,</span> <span class="n">whitelist_patterns</span><span class="p">)</span>
+    <span class="n">current_mounts</span> <span class="o">=</span> <span class="p">[</span><span class="n">mount_entry</span> <span class="k">for</span> <span class="n">mount_entry</span> <span class="ow">in</span> <span class="n">list_mounts</span><span class="p">()]</span>
+
+    <span class="c1"># We need to iterate over mounts in &quot;layering&quot; order.</span>
+    <span class="n">mount_parents</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">mount_entry</span> <span class="ow">in</span> <span class="n">current_mounts</span><span class="p">:</span>
+        <span class="n">mount_parents_item</span> <span class="o">=</span> <span class="n">mount_parents</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">parent_id</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="n">mount_parents_item</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">mount_id</span><span class="p">)</span>
+        <span class="n">mount_parents</span><span class="p">[</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">mount_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">mount_parents_item</span>
+
+    <span class="n">sorted_mounts</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span>
+        <span class="p">[</span>
+            <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">mount_parents</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">mount_id</span><span class="p">,</span> <span class="p">[])),</span> <span class="n">mount_entry</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">mount_entry</span> <span class="ow">in</span> <span class="n">current_mounts</span>
+        <span class="p">],</span>
+        <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span>
+    <span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">mount_entry</span> <span class="ow">in</span> <span class="n">sorted_mounts</span><span class="p">:</span>
+        <span class="n">is_valid</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">mount_entry</span> <span class="k">for</span> <span class="n">whitelist_pat</span> <span class="ow">in</span> <span class="n">whitelist_patterns</span>
+                <span class="k">if</span> <span class="n">fnmatch</span><span class="o">.</span><span class="n">fnmatchcase</span><span class="p">(</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">target</span><span class="p">,</span> <span class="n">whitelist_pat</span><span class="p">)</span>
+            <span class="p">]</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">is_valid</span><span class="p">:</span>
+            <span class="n">_LOGGER</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Mount preserved: </span><span class="si">%r</span><span class="s1">&#39;</span><span class="p">,</span> <span class="n">mount_entry</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">ignore_exc</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">unmount</span><span class="p">(</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">target</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">OSError</span> <span class="k">as</span> <span class="n">err</span><span class="p">:</span>
+                <span class="n">_LOGGER</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s1">&#39;Failed to umount </span><span class="si">%r</span><span class="s1">: </span><span class="si">%s</span><span class="s1">&#39;</span><span class="p">,</span>
+                                <span class="n">mount_entry</span><span class="o">.</span><span class="n">target</span><span class="p">,</span> <span class="n">err</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">unmount</span><span class="p">(</span><span class="n">mount_entry</span><span class="o">.</span><span class="n">target</span><span class="p">)</span></div>
+
+
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s1">&#39;MNT_DETACH&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MNT_EXPIRE&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MNT_FORCE&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_BIND&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_DIRSYNC&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_MANDLOCK&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_MGC_VAL&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_MOVE&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_NOATIME&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_NODEV&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_NODIRATIME&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_NOEXEC&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_NOSUID&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_PRIVATE&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_RDONLY&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_REC&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_REMOUNT&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_SHARED&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_SLAVE&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_SYNCHRONOUS&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MS_UNBINDABLE&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MountEntry&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;cleanup_mounts&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;mount&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;mount_procfs&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;unmount&#39;</span>
+<span class="p">]</span>
+</pre></div>
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper"><div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2018, João Pinto.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.7.4</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.10</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

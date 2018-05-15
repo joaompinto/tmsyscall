@@ -22,8 +22,9 @@ Installation
 pip install python-package-skeleton
 ```
 
-Configuration
+Usage
 -------------
+
 
 Something here.
 

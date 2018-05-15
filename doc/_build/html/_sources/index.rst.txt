@@ -10,6 +10,8 @@ Welcome to tmsyscall's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   tmsyscall
+   modules
 
 
 Indices and tables
