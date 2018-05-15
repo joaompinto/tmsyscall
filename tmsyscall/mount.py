@@ -440,7 +440,8 @@ class MountEntry(object):
 
     @classmethod
     def mount_entry_parse(cls, mount_entry_line):
-        """Create a `:class:MountEntry from a mountinfo data line.
+        """
+        Create a :class:`MountEntry` from a mountinfo data line.
 
         The file contains lines of the form:
 

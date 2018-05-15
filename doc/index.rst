@@ -1,22 +1,23 @@
-.. tmsyscall documentation master file, created by
-   sphinx-quickstart on Tue May 15 17:59:43 2018.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+tmsyscall
+=========
 
-Welcome to tmsyscall's documentation!
-=====================================
+`tmsyscall` is a python library wrapper for some Linux kernel system calls.
 
+It is based in the code from Morgan-Stanley's `threadmill project <https://github.com/Morgan-Stanley/treadmill>`_.
+
+This library can help you:
+
+ * List mounted filesystems
+ * Mount/unmount filesystems
+ * Unshare linux namespaces (man unshare)
+ * Move the root filesystem of the current process  (man privot_root)
+
+Sections
+========
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
 
-   tmsyscall
-   modules
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   mount_api
+   unshare_api
+   pivot_root_api
+   Example

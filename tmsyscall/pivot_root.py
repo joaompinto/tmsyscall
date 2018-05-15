@@ -1,4 +1,5 @@
-"""Wrapper for unshare(2) system call.
+"""
+Wrapper for the pivot_root(2) system call.
 """
 
 from __future__ import absolute_import

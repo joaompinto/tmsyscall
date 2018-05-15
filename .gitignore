@@ -45,7 +45,7 @@ pip-delete-this-directory.txt
 
 
 # Sphinx documentation
-docs/_build/
+doc/_build/
 
 
 docs/html_docs.zip
@@ -58,4 +58,5 @@ docs/html_docs.zip
 *.log
 
 .pytest_cache/
+
 
