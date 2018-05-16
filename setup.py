@@ -11,10 +11,7 @@ from setuptools import setup, find_packages
 from os.path import join
 
 name = "tmsyscall"
-
-desc = "Show detailed information for docker images"
-long_desc = "Shows detailed information for docker images"
-
+desc = "Python library for some advanced Linux system calls"
 
 with  open('classifiers.txt') as c_file:
     classifiers = c_file.read()
