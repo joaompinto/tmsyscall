@@ -22,7 +22,7 @@ with  open('classifiers.txt') as c_file:
 with  open('requirements.txt') as r_file:
     requirements = r_file.read()
 
-with  open('README.md') as r_file:
+with  open('README.rst') as r_file:
     long_desc = r_file.read()
 
 
@@ -31,7 +31,6 @@ setup(
     version=open(join(name, 'version')).readline().strip("\r\n"),
     description=desc,
     long_description=long_desc,
-    long_description_content_type='text/markdown',
     author='João Pinto',
     author_email='lamego.pinto@gmail.com',
     classifiers=[x for x in classifiers.splitlines() if x],
