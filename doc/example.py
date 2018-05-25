@@ -1,20 +1,25 @@
 #!/bin/python
+""" Example of most of the provided systems calls """
 #
 # You can test it using:
-#   wget http://dl-cdn.alpinelinux.org/alpine/v3.7/releases/x86_64/alpine-minirootfs-3.7.0-x86_64.tar.gz
-#   sudo bash -c "mkdir /tmp/rootfs; tar xvf alpine-minirootfs-3.7.0-x86_64.tar.gz -C /tmp/rootfs"
+#   ROOT_FS_FILE=alpine-minirootfs-3.7.0-x86_64.tar.gz
+#   wget http://dl-cdn.alpinelinux.org/alpine/v3.7/releases/x86_64/$ROOT_FS_FILE
+#   sudo bash -c "mkdir /tmp/rootfs; tar xvf $ROOT_FS_FILE -C /tmp/rootfs"
 #   sudo python example.py /tmp/rootfs bash
 
 from __future__ import print_function
 import os
 import sys
-from tmsyscall.unshare import unshare, CLONE_NEWNS, CLONE_NEWUTS, CLONE_NEWIPC, CLONE_NEWPID, CLONE_NEWNET
+from os.path import exists, join
+from tmsyscall.unshare import unshare
+from tmsyscall.unshare import CLONE_NEWNS, CLONE_NEWUTS, CLONE_NEWIPC, CLONE_NEWPID, CLONE_NEWNET
 from tmsyscall.mount import mount, unmount, MS_BIND, MS_PRIVATE, MS_REC, MNT_DETACH
 from tmsyscall.mount import mount_procfs
 from tmsyscall.pivot_root import pivot_root
-from os.path import exists, join
+
 
 def setup_process_isolation():
+    """ Unshare namespaces for process resources isolation """
     # Detach from parent's mount, hostname, ipc and net  namespaces
     unshare(CLONE_NEWNS| CLONE_NEWUTS | CLONE_NEWIPC| CLONE_NEWNET)
 
@@ -48,16 +53,19 @@ def setup_process_isolation():
 
 
 def child():
+    """ Child process that will be run with pid = 1 """
     setup_process_isolation()
     os.execvp(sys.argv[2], sys.argv[2:])
 
 
 def parent(child_pid):
+    """ Parent process, waits for the child """
     pid, status = os.waitpid(child_pid, 0)
     print("wait returned, pid = %d, status = %d" % (pid, status))
 
 
 def main():
+    """ main function """
     # Detach from pid namespace so that our child get's a clean /proc with the new namespace
     unshare(CLONE_NEWPID)
     pid = os.fork()

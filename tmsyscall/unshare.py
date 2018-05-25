@@ -31,6 +31,9 @@ if getattr(_LIBC, 'unshare', None) is None:
 _UNSHARE_DECL = ctypes.CFUNCTYPE(c_int, c_int, use_errno=True)
 _UNSHARE = _UNSHARE_DECL(('unshare', _LIBC))
 
+_SETNS_DECL = ctypes.CFUNCTYPE(c_int, c_int, c_int, use_errno=True)
+_SETNS = _UNSHARE_DECL(('setns', _LIBC))
+
 
 def unshare(what):
     """disassociate parts of the process execution context.
@@ -40,6 +43,12 @@ def unshare(what):
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno), what)
 
+
+def setns(fd, flags):
+    retcode = _SETNS(fd, flags)
+    if retcode != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), fd, flags)
 
 ###############################################################################
 # Constants copied from bits/sched.h
@@ -93,5 +102,6 @@ __all__ = [
     'CLONE_NEWPID',
     'CLONE_NEWNET',
     'CLONE_IO',
-    'unshare',
+    'setns',
+    'unshare'
 ]
